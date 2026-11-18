@@ -19,118 +19,223 @@ function configureProjectViews() {
   group.hidden = false;
 }
 
-async function runCircuit() {
-  const canvas = document.getElementById('circuit-animation');
-  const context = canvas.getContext('2d');
-  if (!context) return;
-  const [ground, props, cars] = await Promise.all(['ground', 'props', 'car'].map(name => {
-    const bitmap = new Image();
-    bitmap.src = 'assets/circuit-' + name + '.png';
-    return bitmap.decode().then(() => bitmap);
-  }));
-  const still = document.getElementById('circuit-still');
-  const controls = document.querySelector('.circuit .controls');
+function runCircuit() {
+  const figure = document.querySelector('.circuit');
+  const host = figure.parentElement;
+  const dialog = document.querySelector('.map-dialog');
+  const expand = figure.querySelector('.map-expand');
+  const guideToggle = figure.querySelector('.guide-toggle');
+  const guide = document.getElementById('map-guide');
+  const select = document.getElementById('map-landmark');
+  const pins = document.getElementById('map-pins');
+  const note = document.getElementById('place-note');
+  const routeNote = document.getElementById('route-note');
+  const routeName = document.getElementById('route-name');
+  const lap = document.getElementById('lap');
   const play = document.getElementById('play');
   const speed = document.getElementById('speed');
-  const lapLabel = document.getElementById('lap');
-  const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
-  const path = circuitData.path.slice();
-  // Put the lap boundary at the painted finish line on the home straight.
-  const finish = path.findIndex(([x, y]) => Math.abs(x - 88) < .7 && Math.abs(y - 82) < .1);
-  if (finish > 0) path.push(...path.splice(0, finish));
-  path.push(path[0]);
-  const distances = [0];
-  for (let i = 1; i < path.length; i++) {
-    distances.push(distances[i - 1] + Math.hypot(path[i][0] - path[i-1][0], path[i][1] - path[i-1][1]));
+  const still = document.getElementById('circuit-still');
+  const canvas = document.getElementById('circuit-animation');
+  const context = canvas.getContext('2d');
+  const controls = figure.querySelector('.controls');
+  const views = [...figure.querySelectorAll('[data-scene]')];
+  const motion = matchMedia('(prefers-reduced-motion: reduce)');
+  const routes = {
+    city: {
+      name: 'Three Sisters loop', counter: 'Lap', seconds: 18,
+      alt: 'Pixel map of downtown Pittsburgh. A miniature red Formula 1 car follows a loop over the Allegheny between the Roberto Clemente and Rachel Carson bridges.',
+      note: 'An imagined lap follows real streets across the Clemente Bridge, along the North Shore, and back across the Carson Bridge.',
+    },
+    campus: {
+      name: 'CMU Buggy course', counter: 'Run', seconds: 22,
+      alt: 'Pixel map of Carnegie Mellon and Schenley Park. A miniature red Formula 1 car traces the Buggy course from Margaret Morrison and Tech around Flagstaff Hill to the finish on Frew.',
+      note: 'The car traces the CMU Sweepstakes route. It starts on Tech Street, rounds Flagstaff Hill on Schenley Drive, finishes on Frew Street, then resets for the next run.',
+    },
+  };
+  const state = {};
+  for (const [key, scene] of Object.entries(circuitData)) {
+    state[key] = { progress: scene.initial / scene.frames.length, count: 1, place: 0 };
   }
-  const courseLength = distances[distances.length - 1];
-  let distance = 10;
-  let segment = 0;
-  let lap = 1;
+  let active = 'city';
   let multiplier = 1;
   let paused = motion.matches;
-  let visible = true;
-  let frame = null;
+  let inView = true;
+  let frameRequest = null;
   let previousTime = null;
+  let lastFrame = -1;
+  let spriteAtlas = null;
+  const backgrounds = new Map();
 
-  function render() {
-    while (segment + 1 < distances.length - 1 && distances[segment + 1] <= distance) segment++;
-    const [x1, y1] = path[segment];
-    const [x2, y2] = path[segment + 1];
-    const offset = (distance - distances[segment]) / (distances[segment + 1] - distances[segment] || 1);
-    const x = x1 + (x2 - x1) * offset;
-    const y = y1 + (y2 - y1) * offset;
-    const angle = (Math.round(Math.atan2(y2 - y1, x2 - x1) * 48 / (2 * Math.PI)) + 48) % 48;
-    const carX = Math.round(187 + (x - y) * 1.64) - 21;
-    const carY = Math.round(38 + (x + y) * .77) - 17;
-    function drawCar() {
-      context.drawImage(cars, angle % 8 * 42, Math.floor(angle / 8) * 30, 42, 30, carX, carY, 42, 30);
-    }
+  function caption() {
+    const label = routes[active].counter;
+    lap.textContent = label + ' ' + String(state[active].count).padStart(2, '0');
+    lap.title = 'Current ' + label.toLowerCase();
+  }
+  function drawCar() {
+    const scene = circuitData[active];
+    const index = Math.min(scene.frames.length - 1, Math.floor(state[active].progress * scene.frames.length));
+    if (index === lastFrame) return;
+    const [x, y, sprite] = scene.frames[index];
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(ground, 0, 0);
-    let carDrawn = false;
-    for (const [depth, left, top, sx, sy, width, height] of circuitData.objects) {
-      if (!carDrawn && depth > x + y) {
-        drawCar();
-        carDrawn = true;
-      }
-      context.drawImage(props, sx, sy, width, height, left, top, width, height);
-    }
-    if (!carDrawn) drawCar();
+    context.drawImage(spriteAtlas, (sprite % 16) * 34, Math.floor(sprite / 16) * 24, 34, 24, x, y, 34, 24);
+    lastFrame = index;
   }
   function tick(time) {
-    frame = null;
     if (previousTime !== null) {
-      distance += Math.min(100, time - previousTime) / 1000 * courseLength / 17 * multiplier;
-      if (distance >= courseLength) {
-        distance %= courseLength;
-        segment = 0;
-        lapLabel.textContent = 'Lap ' + String(++lap).padStart(2, '0');
+      const current = state[active];
+      current.progress += Math.min(time - previousTime, 100) / 1000 * multiplier / routes[active].seconds;
+      if (current.progress >= 1) {
+        current.progress %= 1;
+        current.count++;
+        caption();
       }
     }
     previousTime = time;
-    render();
-    frame = requestAnimationFrame(tick);
+    drawCar();
+    frameRequest = requestAnimationFrame(tick);
   }
-  function updatePlayback() {
-    if (frame !== null) cancelAnimationFrame(frame);
+  function playback() {
+    if (frameRequest !== null) cancelAnimationFrame(frameRequest);
+    frameRequest = null;
     previousTime = null;
-    frame = null;
+    const ready = Boolean(context && spriteAtlas && backgrounds.has(active));
+    canvas.hidden = !ready;
+    controls.hidden = !ready;
+    const src = ready ? circuitData[active].ground : circuitData[active].still;
+    if (still.getAttribute('src') !== 'assets/' + src) still.src = 'assets/' + src;
     const action = paused ? 'Play car animation' : 'Pause car animation';
     play.dataset.paused = String(paused);
     play.setAttribute('aria-label', action);
     play.title = action;
-    if (!paused && visible && !document.hidden) frame = requestAnimationFrame(tick);
+    if (ready) {
+      drawCar();
+      if (!paused && inView && !document.hidden) frameRequest = requestAnimationFrame(tick);
+    }
   }
-  play.addEventListener('click', () => {
-    paused = !paused;
-    updatePlayback();
-  });
+  function showPlace(index) {
+    const place = circuitData[active].places[index];
+    state[active].place = index;
+    select.value = String(index);
+    note.textContent = place.description;
+    const zoom = active === 'campus' ? 18 : 17;
+    document.getElementById('place-map-link').href = 'https://www.openstreetmap.org/?mlat=' + place.lat
+      + '&mlon=' + place.lon + '#map=' + zoom + '/' + place.lat + '/' + place.lon;
+    [...pins.children].forEach((pin, i) => pin.setAttribute('aria-pressed', String(i === index)));
+  }
+  function setGuide(open) {
+    guide.hidden = !open;
+    pins.hidden = !open;
+    guideToggle.setAttribute('aria-expanded', String(open));
+    guideToggle.querySelector('span').textContent = open ? '−' : '+';
+  }
+  function selectArea(key) {
+    active = key;
+    const scene = circuitData[key];
+    figure.dataset.area = key;
+    views.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.scene === key)));
+    still.alt = routes[key].alt;
+    routeName.textContent = routes[key].name;
+    routeNote.textContent = routes[key].note + ' ';
+    if (key === 'campus') {
+      const source = document.createElement('a');
+      source.href = 'https://cmubuggy.org/news/reference/course/';
+      source.textContent = 'Course reference';
+      routeNote.appendChild(source);
+      const campusMap = document.createElement('a');
+      campusMap.href = 'https://www.cmu.edu/sites/default/files/cmu-visit-site-files/2025-08/campus-map.pdf';
+      campusMap.textContent = 'Campus map';
+      routeNote.append(' · ', campusMap);
+    }
+    select.replaceChildren();
+    pins.replaceChildren();
+    scene.places.forEach((place, index) => {
+      select.add(new Option(place.name, String(index)));
+      const pin = document.createElement('button');
+      pin.type = 'button';
+      pin.className = 'map-pin';
+      pin.style.left = (place.x / canvas.width * 100) + '%';
+      pin.style.top = (place.y / canvas.height * 100) + '%';
+      pin.title = place.name;
+      pin.setAttribute('aria-label', place.name);
+      pin.addEventListener('click', () => showPlace(index));
+      pins.append(pin);
+    });
+    showPlace(state[key].place);
+    lastFrame = -1;
+    caption();
+    playback();
+  }
+  views.forEach(button => button.addEventListener('click', () => selectArea(button.dataset.scene)));
+  select.addEventListener('change', () => showPlace(Number(select.value)));
+  guideToggle.addEventListener('click', () => setGuide(guide.hidden));
+  play.addEventListener('click', () => { paused = !paused; playback(); });
   speed.addEventListener('click', () => {
     multiplier = multiplier === 1 ? 2 : 1;
     speed.textContent = multiplier + '×';
     speed.setAttribute('aria-label', 'Change car speed, currently ' + multiplier + ' times');
   });
-  motion.addEventListener('change', () => {
-    paused = motion.matches;
-    updatePlayback();
-  });
-  document.addEventListener('visibilitychange', updatePlayback);
+  let previousGuide = false;
+  function expandLabel(open) {
+    const label = open ? 'Close expanded map' : 'Enlarge map';
+    expand.setAttribute('aria-label', label);
+    expand.title = label;
+  }
+  if (typeof dialog.showModal === 'function') {
+    expand.addEventListener('click', () => {
+      if (dialog.open) {
+        dialog.close();
+        return;
+      }
+      previousGuide = !guide.hidden;
+      host.style.minHeight = host.getBoundingClientRect().height + 'px';
+      dialog.append(figure);
+      dialog.showModal();
+      setGuide(true);
+      expandLabel(true);
+      expand.focus({ preventScroll: true });
+    });
+    dialog.addEventListener('close', () => {
+      host.append(figure);
+      host.style.minHeight = '';
+      setGuide(previousGuide);
+      expandLabel(false);
+      expand.focus({ preventScroll: true });
+    });
+    dialog.addEventListener('click', event => {
+      if (event.target !== dialog) return;
+      const r = dialog.getBoundingClientRect();
+      if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close();
+    });
+  } else { expand.hidden = true; }
+  motion.addEventListener('change', () => { paused = motion.matches; playback(); });
+  document.addEventListener('visibilitychange', playback);
   if ('IntersectionObserver' in window) {
     new IntersectionObserver(([entry]) => {
-      visible = entry.isIntersecting;
-      updatePlayback();
+      inView = entry.isIntersecting;
+      playback();
     }).observe(canvas.parentElement);
   }
+  guideToggle.hidden = false;
+  figure.querySelector('.map-toolbar').hidden = false;
+  selectArea('city');
+  if (!context) return;
   context.imageSmoothingEnabled = false;
-  render();
-  // Keep the artwork's descriptive alternative on the figure in animated mode.
-  canvas.parentElement.setAttribute('role', 'img');
-  canvas.parentElement.setAttribute('aria-label', still.alt);
-  still.hidden = true;
-  canvas.hidden = false;
-  controls.hidden = false;
-  updatePlayback();
+  async function bitmap(file) {
+    const image = new Image();
+    image.src = 'assets/' + file;
+    await image.decode();
+    return image;
+  }
+  bitmap('circuit-props.png').then(image => {
+    spriteAtlas = image;
+    playback();
+  }).catch(() => { /* Retain both static scenes and their landmark guides. */ });
+  for (const [key, scene] of Object.entries(circuitData)) {
+    bitmap(scene.ground).then(image => {
+      backgrounds.set(key, image);
+      if (active === key) playback();
+    }).catch(() => { /* The static route illustration remains available. */ });
+  }
 }
 configureProjectViews();
-runCircuit().catch(() => { /* The illustrated still is the fallback when canvas assets cannot load. */ });
+runCircuit();

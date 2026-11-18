@@ -4,7 +4,7 @@ function configureProjectViews() {
   const gridButton = document.getElementById('grid-view');
   const listButton = document.getElementById('list-view');
   function selectView(view) {
-    const list = view === 'list';
+    const list = view !== 'grid';
     grid.classList.toggle('is-list', list);
     gridButton.setAttribute('aria-pressed', String(!list));
     listButton.setAttribute('aria-pressed', String(list));
@@ -15,7 +15,7 @@ function configureProjectViews() {
       try { localStorage.setItem('tm-project-view', view); } catch { /* Preferences are optional. */ }
     });
   }
-  try { selectView(localStorage.getItem('tm-project-view')); } catch { selectView('grid'); }
+  try { selectView(localStorage.getItem('tm-project-view')); } catch { selectView('list'); }
   group.hidden = false;
 }
 
@@ -36,25 +36,25 @@ function runCircuit() {
   const speed = document.getElementById('speed');
   const still = document.getElementById('circuit-still');
   const canvas = document.getElementById('circuit-animation');
-  const context = canvas.getContext('2d');
+  const stage = canvas.parentElement;
   const controls = figure.querySelector('.controls');
   const views = [...figure.querySelectorAll('[data-scene]')];
   const motion = matchMedia('(prefers-reduced-motion: reduce)');
   const routes = {
     city: {
-      name: 'Three Sisters loop', counter: 'Lap', seconds: 18,
-      alt: 'Pixel map of downtown Pittsburgh. A miniature red Formula 1 car follows a loop over the Allegheny between the Roberto Clemente and Rachel Carson bridges.',
-      note: 'An imagined lap follows real streets across the Clemente Bridge, along the North Shore, and back across the Carson Bridge.',
+      name: 'Three Rivers flight', counter: 'Orbit', seconds: 34, vehicle: 'flight',
+      alt: 'Pixel map of downtown Pittsburgh. A small high-wing propeller plane banks over the three rivers and the downtown skyline.',
+      note: 'A high-wing touring plane makes a sightseeing loop over the Point, the North Shore, and the downtown skyline.',
     },
     campus: {
-      name: 'CMU Buggy course', counter: 'Run', seconds: 22,
+      name: 'CMU Buggy course', counter: 'Run', seconds: 22, vehicle: 'car',
       alt: 'Pixel map of Carnegie Mellon and Schenley Park. A miniature red Formula 1 car traces the Buggy course from Margaret Morrison and Tech around Flagstaff Hill to the finish on Frew.',
       note: 'The car traces the CMU Sweepstakes route. It starts on Tech Street, rounds Flagstaff Hill on Schenley Drive, finishes on Frew Street, then resets for the next run.',
     },
   };
   const state = {};
-  for (const [key, scene] of Object.entries(circuitData)) {
-    state[key] = { progress: scene.initial / scene.frames.length, count: 1, place: 0 };
+  for (const key of Object.keys(routes)) {
+    state[key] = { progress: key === 'city' ? .545 : 10 / 479, count: 1, place: 0 };
   }
   let active = 'city';
   let multiplier = 1;
@@ -62,23 +62,30 @@ function runCircuit() {
   let inView = true;
   let frameRequest = null;
   let previousTime = null;
-  let lastFrame = -1;
-  let spriteAtlas = null;
-  const backgrounds = new Map();
+  let turnFrame = null;
+  const orbit = new MapOrbit(canvas, () => {
+    positionPins();
+    playback();
+  });
 
+  function positionPins() {
+    const view = orbit.facing?.view;
+    if (view) {
+      const north = Math.atan2(view.sin, .57 * view.cos);
+      figure.style.setProperty('--north-turn', north + 'rad');
+    }
+    if (pins.hidden) return;
+    const places = circuitData[active].places;
+    [...pins.children].forEach((pin, i) => {
+      const p = orbit.landmark(places[i].position);
+      pin.style.left = (p[0] / canvas.width * 100) + '%';
+      pin.style.top = (p[1] / canvas.height * 100) + '%';
+    });
+  }
   function caption() {
     const label = routes[active].counter;
     lap.textContent = label + ' ' + String(state[active].count).padStart(2, '0');
     lap.title = 'Current ' + label.toLowerCase();
-  }
-  function drawCar() {
-    const scene = circuitData[active];
-    const index = Math.min(scene.frames.length - 1, Math.floor(state[active].progress * scene.frames.length));
-    if (index === lastFrame) return;
-    const [x, y, sprite] = scene.frames[index];
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(spriteAtlas, (sprite % 16) * 34, Math.floor(sprite / 16) * 24, 34, 24, x, y, 34, 24);
-    lastFrame = index;
   }
   function tick(time) {
     if (previousTime !== null) {
@@ -91,24 +98,23 @@ function runCircuit() {
       }
     }
     previousTime = time;
-    drawCar();
+    orbit.draw(state[active].progress);
     frameRequest = requestAnimationFrame(tick);
   }
   function playback() {
     if (frameRequest !== null) cancelAnimationFrame(frameRequest);
     frameRequest = null;
     previousTime = null;
-    const ready = Boolean(context && spriteAtlas && backgrounds.has(active));
+    const ready = orbit.ready;
     canvas.hidden = !ready;
+    still.hidden = ready;
     controls.hidden = !ready;
-    const src = ready ? circuitData[active].ground : circuitData[active].still;
-    if (still.getAttribute('src') !== 'assets/' + src) still.src = 'assets/' + src;
-    const action = paused ? 'Play car animation' : 'Pause car animation';
+    const action = (paused ? 'Play ' : 'Pause ') + routes[active].vehicle + ' animation';
     play.dataset.paused = String(paused);
     play.setAttribute('aria-label', action);
     play.title = action;
     if (ready) {
-      drawCar();
+      orbit.draw(state[active].progress);
       if (!paused && inView && !document.hidden) frameRequest = requestAnimationFrame(tick);
     }
   }
@@ -125,6 +131,7 @@ function runCircuit() {
   function setGuide(open) {
     guide.hidden = !open;
     pins.hidden = !open;
+    positionPins();
     guideToggle.setAttribute('aria-expanded', String(open));
     guideToggle.querySelector('span').textContent = open ? '−' : '+';
   }
@@ -133,7 +140,13 @@ function runCircuit() {
     const scene = circuitData[key];
     figure.dataset.area = key;
     views.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.scene === key)));
+    stopTurn();
+    orbit.switchTo(key);
+    still.src = 'assets/' + scene.still;
     still.alt = routes[key].alt;
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', routes[key].alt);
+    canvas.removeAttribute('aria-hidden');
     routeName.textContent = routes[key].name;
     routeNote.textContent = routes[key].note + ' ';
     if (key === 'campus') {
@@ -153,18 +166,76 @@ function runCircuit() {
       const pin = document.createElement('button');
       pin.type = 'button';
       pin.className = 'map-pin';
-      pin.style.left = (place.x / canvas.width * 100) + '%';
-      pin.style.top = (place.y / canvas.height * 100) + '%';
       pin.title = place.name;
       pin.setAttribute('aria-label', place.name);
       pin.addEventListener('click', () => showPlace(index));
       pins.append(pin);
     });
     showPlace(state[key].place);
-    lastFrame = -1;
+    positionPins();
     caption();
     playback();
   }
+  function stopTurn() {
+    if (turnFrame !== null) cancelAnimationFrame(turnFrame);
+    turnFrame = null;
+  }
+  function setBearing(radians) {
+    stage.dataset.turned = '';
+    orbit.turnTo(radians);
+    positionPins();
+    orbit.draw(state[active].progress);
+  }
+  function rotate(delta) {
+    stopTurn();
+    const start = orbit.bearings[active];
+    if (motion.matches) {
+      setBearing(start + delta);
+      return;
+    }
+    const begin = performance.now();
+    function advance(time) {
+      const t = Math.min(1, (time - begin) / 240);
+      setBearing(start + delta * (1 - Math.pow(1 - t, 3)));
+      turnFrame = t < 1 ? requestAnimationFrame(advance) : null;
+    }
+    turnFrame = requestAnimationFrame(advance);
+  }
+  figure.querySelectorAll('[data-turn]').forEach(button => {
+    button.addEventListener('click', () => rotate(Number(button.dataset.turn) * Math.PI / 4));
+  });
+  stage.addEventListener('keydown', event => {
+    if (event.target !== stage) return;
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      rotate((event.key === 'ArrowLeft' ? -1 : 1) * Math.PI / 4);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      stopTurn();
+      setBearing(0);
+    }
+  });
+  let drag = null;
+  stage.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || !event.isPrimary || event.target.closest('button')) return;
+    stopTurn();
+    drag = {id: event.pointerId, x: event.clientX, y: event.clientY, angle: orbit.bearings[active]};
+    stage.setPointerCapture(event.pointerId);
+  });
+  stage.addEventListener('pointermove', event => {
+    if (!drag || drag.id !== event.pointerId) return;
+    const dx = event.clientX - drag.x;
+    if (!stage.hasAttribute('data-dragging') && Math.abs(dx) < 5) return;
+    stage.dataset.dragging = '';
+    setBearing(drag.angle + dx * Math.PI * 2 / stage.clientWidth);
+  });
+  function endDrag() {
+    drag = null;
+    stage.removeAttribute('data-dragging');
+  }
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
+  stage.addEventListener('lostpointercapture', endDrag);
   views.forEach(button => button.addEventListener('click', () => selectArea(button.dataset.scene)));
   select.addEventListener('change', () => showPlace(Number(select.value)));
   guideToggle.addEventListener('click', () => setGuide(guide.hidden));
@@ -215,27 +286,15 @@ function runCircuit() {
       playback();
     }).observe(canvas.parentElement);
   }
+  if (orbit.context) {
+    stage.tabIndex = 0;
+    stage.dataset.rotatable = '';
+  } else {
+    figure.querySelector('.turn-controls').hidden = true;
+  }
   guideToggle.hidden = false;
   figure.querySelector('.map-toolbar').hidden = false;
   selectArea('city');
-  if (!context) return;
-  context.imageSmoothingEnabled = false;
-  async function bitmap(file) {
-    const image = new Image();
-    image.src = 'assets/' + file;
-    await image.decode();
-    return image;
-  }
-  bitmap('circuit-props.png').then(image => {
-    spriteAtlas = image;
-    playback();
-  }).catch(() => { /* Retain both static scenes and their landmark guides. */ });
-  for (const [key, scene] of Object.entries(circuitData)) {
-    bitmap(scene.ground).then(image => {
-      backgrounds.set(key, image);
-      if (active === key) playback();
-    }).catch(() => { /* The static route illustration remains available. */ });
-  }
 }
 configureProjectViews();
 runCircuit();

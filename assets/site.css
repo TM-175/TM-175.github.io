@@ -54,7 +54,7 @@ img, canvas { max-width: 100%; display: block; }
 .monogram { display: block; width: 37px; height: 37px; }
 nav { gap: clamp(16px, 2.6vw, 38px); }
 nav a { font-size: 14px; font-weight: 520; padding-block: 10px; }
-nav a:hover, .quiet-link:hover, .back:hover, footer a:hover, .contact-links a:hover, .detail-link:hover { color: var(--signal); }
+nav a:hover, .quiet-link:hover, .back:hover, footer a:hover, .contact-links a[href]:hover, .detail-link:hover { color: var(--signal); }
 nav .nav-contact { gap: 6px; padding: 8px 13px; border: 1px solid #c6c9c0; border-radius: 6px; }
 .nav-contact .icon { width: 14px; height: 14px; }
 .hero { display: grid; grid-template-columns: 1fr 1.13fr; align-items: center; gap: 3.4%; padding: clamp(36px,4.3vw,68px) 0 clamp(38px,4.5vw,70px); }
@@ -172,7 +172,9 @@ h2 { font-size: clamp(30px,3vw,44px); line-height: 1.13; letter-spacing: -.065em
 .contact p { margin-top: 15px; max-width: 430px; }
 .contact-links { display: flex; flex-wrap: wrap; gap: 12px 19px; align-items: center; }
 .contact-links a { display: flex; align-items: center; gap: 9px; min-height: 30px; font-size: 14px; }
-.contact-links a:first-child { flex-basis: 100%; font-size: clamp(17px,1.7vw,22px); font-weight: 550; letter-spacing: -.04em; }
+.contact-links .contact-email { overflow-wrap: anywhere; flex-basis: 100%; font-size: clamp(17px,1.7vw,22px); font-weight: 550; letter-spacing: -.04em; }
+.contact-email:not([href]) { color: var(--quiet); }
+.contact-email:not([href]) .tiny { display: none; }
 .contact-links .icon { width: 16px; height: 16px; }
 footer { border-top: 1px solid var(--line); justify-content: space-between; font-size: 11px; color: var(--quiet); min-height: 75px; }
 footer a { gap: 5px; padding-block: 12px; }

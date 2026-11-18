@@ -296,5 +296,13 @@ function runCircuit() {
   figure.querySelector('.map-toolbar').hidden = false;
   selectArea('city');
 }
+const secondaryEmail = document.getElementById('secondary-email');
+if (secondaryEmail) {
+  const address = secondaryEmail.textContent.trim();
+  if (address && address !== 'second@example.com') {
+    secondaryEmail.href = 'mailto:' + address;
+  }
+}
+
 configureProjectViews();
 runCircuit();
